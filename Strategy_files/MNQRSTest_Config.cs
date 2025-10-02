@@ -54,7 +54,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private int VP_LongResolution;
         private int HysteresisBars;
 
-        // Positional volume proxy values handled in momentum partial
+
 
         // Resist and logging state placeholders
         private double lastResistMissingFlag;
