@@ -54,9 +54,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private int VP_LongResolution;
         private int HysteresisBars;
 
-        // Positional volume proxy values (exposed via properties elsewhere)
-        private double lastQ_PosVol_Proxy = 0.5;
-        private double lastQ_PosVol_Proxy_Conf = 0.8;
+
 
         // Resist and logging state placeholders
         private double lastResistMissingFlag;
