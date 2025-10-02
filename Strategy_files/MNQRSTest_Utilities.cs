@@ -1,76 +1,60 @@
 using System;
 using System.Collections.Generic;
+using NinjaTrader.NinjaScript;
+using NinjaTrader.NinjaScript.Strategies;
 
 namespace NinjaTrader.NinjaScript.Strategies
 {
+    public partial class MNQRSTest : Strategy
+    {
+    }
+
+    public static class Helpers
+    {
+        public static double Clamp01(double x) =>
+            (x < 0.0 ? 0.0 : (x > 1.0 ? 1.0 : x));
+        public static double Squash(double x) =>
+            0.5 * (Math.Tanh(x) + 1.0);
+        public static double Blend(double a, double b, double w) =>
+            (1 - w) * a + w * b;
+    }
+
     public class RollingStats
     {
-        private int maxLength;
-        private Queue<double> window;
-        private double sum;
-        private double sumSquares;
-
-        public RollingStats(int length)
-        {
-            this.maxLength = length;
-            this.window = new Queue<double>();
-            this.sum = 0.0;
-            this.sumSquares = 0.0;
-        }
-
-        public double Update(double value)
-        {
-            window.Enqueue(value);
-            sum += value;
-            sumSquares += value * value;
-            if (window.Count > maxLength)
-            {
-                double removed = window.Dequeue();
-                sum -= removed;
-                sumSquares -= removed * removed;
-            }
-            return value;
-        }
-
-        public double Mean => window.Count > 0 ? sum / window.Count : 0.0;
-
-        public double StandardDeviation
-        {
-            get
-            {
-                if (window.Count == 0) return 0.0;
-                double mean = sum / window.Count;
-                return Math.Sqrt(sumSquares / window.Count - mean * mean);
-            }
-        }
-
+        private readonly int maxLength;
+        private readonly Queue<double> window = new Queue<double>();
+        public RollingStats(int length) { maxLength = length; }
         public double UpdateAndZ(double value)
         {
-            Update(value);
-            double sd = StandardDeviation;
-            if (sd == 0.0) return 0.0;
-            return (value - Mean) / sd;
+            window.Enqueue(value);
+            if (window.Count > maxLength) window.Dequeue();
+            int n = window.Count;
+            if (n == 0) return 0.0;
+            double sum = 0, sumSq = 0;
+            foreach (double v in window) { sum += v; sumSq += v * v; }
+            double mean = sum / n;
+            double var = (sumSq / n) - (mean * mean);
+            if (var < 1e-12) return 0.0;
+            return (value - mean) / Math.Sqrt(var);
         }
     }
 
     public class Ema
     {
-        private double alpha;
+        private readonly double alpha;
+        private bool hasValue;
         private double ema;
-        private bool initialized = false;
-
-        public Ema(int length)
+        public Ema(int period)
         {
-            alpha = 2.0 / (length + 1);
-            ema = 0.0;
+            if (period < 1) period = 1;
+            alpha = 2.0 / (period + 1);
         }
-
         public double Update(double value)
         {
-            if (!initialized)
+            if (!hasValue)
             {
                 ema = value;
-                initialized = true;
+                hasValue = true;
             }
             else
             {
