@@ -151,6 +151,11 @@ public double RunnerMomoThreshold { get; set; }
 [Display(Name = "RunnerSpaceThreshold", GroupName = "Runner", Order = 301)]
 public double RunnerSpaceThreshold { get; set; }
 
+        // Maximum number of bars to hold a runner trade. 0 disables the timeout.
+        [NinjaScriptProperty][Range(0, 1000)]
+        [Display(Name = "RunnerMaxBars", GroupName = "Runner", Order = 305)]
+        public int RunnerMaxBars { get; set; }
+
 
         // Momentum core weights
         [NinjaScriptProperty][Range(0.0, 1.0)]
@@ -303,6 +308,73 @@ public int BaseContracts { get; set; }
 		[Display(Name="ForceEntry", GroupName="Debug", Order=999)]
 		public bool ForceEntry { get; set; }
 
+        // Verbose setup logging toggle: when true, logs all skip and gating reasons to the setup log;
+        // when false, only armed/triggered/expired setups are logged.  Useful to reduce log noise.
+        [NinjaScriptProperty]
+        [Display(Name = "LogSetupsVerbose", GroupName = "Debug", Order = 998)]
+        public bool LogSetupsVerbose { get; set; }
+
+        // Regime toggles
+        [NinjaScriptProperty]
+        [Display(Name = "UseRegimes", GroupName = "Regime", Order = 350)]
+        public bool UseRegimes { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "ActiveRegime", GroupName = "Regime", Order = 351)]
+        public string ActiveRegime { get; set; }
+
+        // Regime specific filter thresholds
+        // Separate minimum ATR thresholds for different regimes.  When regimes
+        // are enabled (UseRegimes = true) and auto switching is on, the ATR
+        // filter will use these values instead of the base MinATR.  Defaults
+        // match the base MinATR for convenience.
+        [NinjaScriptProperty][Range(0.0, 1000.0)]
+        [Display(Name = "MinATRTrend", GroupName = "Regime Filters", Order = 360)]
+        public double MinATRTrend { get; set; }
+        [NinjaScriptProperty][Range(0.0, 1000.0)]
+        [Display(Name = "MinATRChop", GroupName = "Regime Filters", Order = 361)]
+        public double MinATRChop { get; set; }
+
+        // Separate trend slope minimums for different regimes.  Defaults
+        // match the base TrendSlopeMin.
+        [NinjaScriptProperty][Range(0.0, 1.0)]
+        [Display(Name = "TrendSlopeMinTrend", GroupName = "Regime Filters", Order = 362)]
+        public double TrendSlopeMinTrend { get; set; }
+        [NinjaScriptProperty][Range(0.0, 1.0)]
+        [Display(Name = "TrendSlopeMinChop", GroupName = "Regime Filters", Order = 363)]
+        public double TrendSlopeMinChop { get; set; }
+
+        // Separate minimum SpaceR thresholds for different regimes.  When regimes
+        // are active, the space/resistance filter will use these thresholds.
+        [NinjaScriptProperty][Range(0.0, 10.0)]
+        [Display(Name = "MinSpaceRTrend", GroupName = "Regime Filters", Order = 364)]
+        public double MinSpaceRTrend { get; set; }
+        [NinjaScriptProperty][Range(0.0, 10.0)]
+        [Display(Name = "MinSpaceRChop", GroupName = "Regime Filters", Order = 365)]
+        public double MinSpaceRChop { get; set; }
+
+        // Separate minimum QTotal2 thresholds for different regimes.  These
+        // thresholds override MinQTotal2 when regimes are enabled.  Defaults
+        // match the base MinQTotal2.
+        [NinjaScriptProperty][Range(0.0, 1.0)]
+        [Display(Name = "MinQTotal2Trend", GroupName = "Regime Filters", Order = 366)]
+        public double MinQTotal2Trend { get; set; }
+        [NinjaScriptProperty][Range(0.0, 1.0)]
+        [Display(Name = "MinQTotal2Chop", GroupName = "Regime Filters", Order = 367)]
+        public double MinQTotal2Chop { get; set; }
+
+        // Toggle for automatic regime detection and switching.  When true
+        // DetectRegime() will be called on each bar and ActiveRegime will
+        // update automatically.  When false, ActiveRegime remains static.
+        [NinjaScriptProperty]
+        [Display(Name = "UseAutoRegimeSwitch", GroupName = "Regime", Order = 368)]
+        public bool UseAutoRegimeSwitch { get; set; }
+
+        // Optional equity curve logging
+        [NinjaScriptProperty]
+        [Display(Name = "LogEquityCurve", GroupName = "Debug", Order = 997)]
+        public bool LogEquityCurve { get; set; }
+
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
@@ -349,6 +421,9 @@ public int BaseContracts { get; set; }
                 RunnerMomoThreshold  = 0.0;
                 RunnerSpaceThreshold = 0.0;
 
+                // Runner management timeout: default to 0 (disabled)
+                RunnerMaxBars = 0;
+
                 // EMA anchor defaults
                 EntryEmaPeriod   = 62;
                 MinEmaTouchTicks = 2;
@@ -369,6 +444,25 @@ public int BaseContracts { get; set; }
 
                 // Debug toggles
                 ForceEntry = false;
+                LogSetupsVerbose = false;
+
+                // Regime and equity logging defaults
+                UseRegimes   = false;
+                ActiveRegime = "Default";
+                LogEquityCurve = false;
+
+                // Regime filter defaults: by default match the base values so behaviour
+                // remains unchanged until explicitly overridden.  This allows
+                // seamless enabling of regimes.
+                MinATRTrend     = 0.0;
+                MinATRChop      = 0.0;
+                TrendSlopeMinTrend = 0.0;
+                TrendSlopeMinChop  = 0.0;
+                MinSpaceRTrend     = 1.0;
+                MinSpaceRChop      = 1.0;
+                MinQTotal2Trend    = 0.5;
+                MinQTotal2Chop     = 0.5;
+                UseAutoRegimeSwitch = false;
             }
             else if (State == State.DataLoaded)
             {

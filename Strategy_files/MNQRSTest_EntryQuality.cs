@@ -72,11 +72,28 @@ namespace NinjaTrader.NinjaScript.Strategies
         /// </summary>
         private bool IsVolatilityOk()
         {
+            // If the volatility filter is disabled, always return true
             if (!UseVolatilityFilter)
                 return true;
             // Ensure ATR indicator exists
             double atrVal = atrIndicator != null ? atrIndicator[0] : 0.0;
-            return atrVal >= MinATR && atrVal <= MaxATR;
+            // Determine the minimum ATR threshold based on the active regime. When
+            // regimes are enabled, pull regime‑specific thresholds; otherwise use
+            // the base MinATR.  MaxATR remains global across regimes.
+            double minAtr = MinATR;
+            if (UseRegimes)
+            {
+                string regime = (ActiveRegime ?? string.Empty).Trim();
+                if (string.Equals(regime, "Trend", StringComparison.OrdinalIgnoreCase))
+                {
+                    minAtr = MinATRTrend;
+                }
+                else if (string.Equals(regime, "Chop", StringComparison.OrdinalIgnoreCase))
+                {
+                    minAtr = MinATRChop;
+                }
+            }
+            return atrVal >= minAtr && atrVal <= MaxATR;
         }
 
         /// <summary>
@@ -86,19 +103,34 @@ namespace NinjaTrader.NinjaScript.Strategies
         /// <param name="wantLong">True if evaluating a long setup; false for short.</param>
         private bool IsTrendOk(bool wantLong)
         {
+            // If the trend filter is disabled, always return true
             if (!UseTrendFilter)
                 return true;
-            // Compute raw slope (difference between current and prior EMA values)
+            // Ensure EMA is valid
             if (priceEma == null || CurrentBar < 1)
                 return false;
+            // Determine the slope threshold based on the active regime.  When
+            // regimes are enabled, choose the appropriate per‑regime slope
+            // minimum; otherwise use the base TrendSlopeMin.  A long setup
+            // requires a positive slope above the threshold, while a short
+            // setup requires a negative slope below the (negated) threshold.
+            double threshold = TrendSlopeMin;
+            if (UseRegimes)
+            {
+                string regime = (ActiveRegime ?? string.Empty).Trim();
+                if (string.Equals(regime, "Trend", StringComparison.OrdinalIgnoreCase))
+                    threshold = TrendSlopeMinTrend;
+                else if (string.Equals(regime, "Chop", StringComparison.OrdinalIgnoreCase))
+                    threshold = TrendSlopeMinChop;
+            }
             double slope = priceEma[0] - priceEma[1];
             if (wantLong)
             {
-                return slope >= TrendSlopeMin;
+                return slope >= threshold;
             }
             else
             {
-                return (-slope) >= TrendSlopeMin;
+                return (-slope) >= threshold;
             }
         }
 
@@ -213,7 +245,8 @@ private void UpdateEntrySignals()
     // Debug: skip bars with too large a range for breakout setups
     if (barRange > threshold)
     {
-        Print($"Skip: Bar too large (range {barRange:F2} > smallThreshold {threshold:F2})");
+        if (LogSetupsVerbose)
+            Print($"Skip: Bar too large (range {barRange:F2} > smallThreshold {threshold:F2})");
         return;
     }
 
@@ -246,8 +279,11 @@ private void UpdateEntrySignals()
     // If neither a long nor a short EMA interaction is detected, skip setup and log the reason
     if (!crossUp && !crossDown)
     {
-        Print("Skip: No EMA cross or touch detected");
-        LogSetupRow("Skip", "", "NoEmaTouch", High[0], Low[0], 0, 0, 0);
+        if (LogSetupsVerbose)
+        {
+            Print("Skip: No EMA cross or touch detected");
+            LogSetupRow("Skip", "", "NoEmaTouch", High[0], Low[0], 0, 0, 0);
+        }
         return;
     }
 
@@ -257,37 +293,65 @@ private void UpdateEntrySignals()
         bool allowSetup = true;
 
         // Quality gate
-        if (UseQualityGate && lastQTotalNew < MinQTotal2)
+        if (UseQualityGate)
         {
-            Print($"Skip: QualityGate (QTotalNew {lastQTotalNew:F2} < MinQTotal2 {MinQTotal2:F2})");
-            LogSetupRow("Skip", crossUp ? "Long" : "Short", "QualityFail", High[0], Low[0], 0, 0, 0);
-            allowSetup = false;
+            // Determine minimum composite quality threshold based on regime
+            double minQ = MinQTotal2;
+            if (UseRegimes)
+            {
+                string regime = (ActiveRegime ?? string.Empty).Trim();
+                if (string.Equals(regime, "Trend", StringComparison.OrdinalIgnoreCase))
+                    minQ = MinQTotal2Trend;
+                else if (string.Equals(regime, "Chop", StringComparison.OrdinalIgnoreCase))
+                    minQ = MinQTotal2Chop;
+            }
+            if (lastQTotalNew < minQ)
+            {
+                if (LogSetupsVerbose)
+                {
+                    Print($"Skip: QualityGate (QTotalNew {lastQTotalNew:F2} < MinQTotal2 {minQ:F2})");
+                    LogSetupRow("Skip", crossUp ? "Long" : "Short", "QualityFail", High[0], Low[0], 0, 0, 0);
+                }
+                allowSetup = false;
+            }
         }
         // Session time filter
         if (!IsWithinEntryTime())
         {
-            Print("Skip: Time filter fail");
-            LogSetupRow("Skip", crossUp ? "Long" : "Short", "TimeFail", High[0], Low[0], 0, 0, 0);
+            if (LogSetupsVerbose)
+            {
+                Print("Skip: Time filter fail");
+                LogSetupRow("Skip", crossUp ? "Long" : "Short", "TimeFail", High[0], Low[0], 0, 0, 0);
+            }
             allowSetup = false;
         }
         // Volatility filter
         if (!IsVolatilityOk())
         {
-            Print("Skip: Volatility filter fail");
-            LogSetupRow("Skip", crossUp ? "Long" : "Short", "VolFail", High[0], Low[0], 0, 0, 0);
+            if (LogSetupsVerbose)
+            {
+                Print("Skip: Volatility filter fail");
+                LogSetupRow("Skip", crossUp ? "Long" : "Short", "VolFail", High[0], Low[0], 0, 0, 0);
+            }
             allowSetup = false;
         }
         // Trend filter
         if (crossUp && !IsTrendOk(true))
         {
-            Print("Skip: Trend filter fail (long)");
-            LogSetupRow("Skip", "Long", "TrendFail", High[0], Low[0], 0, 0, 0);
+            if (LogSetupsVerbose)
+            {
+                Print("Skip: Trend filter fail (long)");
+                LogSetupRow("Skip", "Long", "TrendFail", High[0], Low[0], 0, 0, 0);
+            }
             allowSetup = false;
         }
         if (crossDown && !IsTrendOk(false))
         {
-            Print("Skip: Trend filter fail (short)");
-            LogSetupRow("Skip", "Short", "TrendFail", High[0], Low[0], 0, 0, 0);
+            if (LogSetupsVerbose)
+            {
+                Print("Skip: Trend filter fail (short)");
+                LogSetupRow("Skip", "Short", "TrendFail", High[0], Low[0], 0, 0, 0);
+            }
             allowSetup = false;
         }
 
@@ -298,8 +362,11 @@ private void UpdateEntrySignals()
                 // --- Pass 10: space/resistance gating ---
                 if (!CheckSpaceAndResistance(true))
                 {
-                    Print("Skip: Space/resistance fail (long)");
-                    LogSetupRow("Skip", "Long", "SpaceFail", High[0], Low[0], 0, 0, 0);
+                    if (LogSetupsVerbose)
+                    {
+                        Print("Skip: Space/resistance fail (long)");
+                        LogSetupRow("Skip", "Long", "SpaceFail", High[0], Low[0], 0, 0, 0);
+                    }
                     return;
                 }
 
@@ -316,8 +383,11 @@ private void UpdateEntrySignals()
             {
                 if (!CheckSpaceAndResistance(false))
                 {
-                    Print("Skip: Space/resistance fail (short)");
-                    LogSetupRow("Skip", "Short", "SpaceFail", High[0], Low[0], 0, 0, 0);
+                    if (LogSetupsVerbose)
+                    {
+                        Print("Skip: Space/resistance fail (short)");
+                        LogSetupRow("Skip", "Short", "SpaceFail", High[0], Low[0], 0, 0, 0);
+                    }
                     return;
                 }
 
@@ -373,6 +443,24 @@ protected override void OnBarUpdate()
         return;
     }
 
+
+    // Regime auto-switch: if enabled, detect regime on each bar
+    if (UseRegimes && UseAutoRegimeSwitch)
+    {
+        try
+        {
+            string newRegime = DetectRegime();
+            // Only update if detection returns a non-empty value and it differs
+            if (!string.IsNullOrEmpty(newRegime) && !string.Equals(newRegime, ActiveRegime, StringComparison.OrdinalIgnoreCase))
+            {
+                // Optionally, print or log the regime switch for debugging
+                if (LogSetupsVerbose)
+                    Print($"Regime switch: {ActiveRegime} -> {newRegime} at bar {CurrentBar}");
+                ActiveRegime = newRegime;
+            }
+        }
+        catch { /* ignore errors in regime detection */ }
+    }
 
     // Process only primary series and after enough bars are present
     if (BarsInProgress != 0) return;
@@ -477,6 +565,26 @@ protected override void OnBarUpdate()
     // 7. In-trade management
     if (Position.MarketPosition != MarketPosition.Flat)
     {
+        // Runner timeout handling: exit runner leg after a maximum number of bars if configured
+        if (RunnerMaxBars > 0)
+        {
+            try
+            {
+                // BarsSinceEntryExecution returns -1 if no entry with that signal exists
+
+				int sinceRunner = BarsSinceEntryExecution(0, "RUNNER", 0);
+				if (sinceRunner >= 0 && sinceRunner >= RunnerMaxBars)
+
+                {
+                    // Close the RUNNER leg using a timeout exit name
+                    if (Position.MarketPosition == MarketPosition.Long)
+                        ExitLong("RunnerTimeout", "RUNNER");
+                    else if (Position.MarketPosition == MarketPosition.Short)
+                        ExitShort("RunnerTimeout", "RUNNER");
+                }
+            }
+            catch { /* ignore any errors in timeout logic */ }
+        }
         ApplyVPManagementAdjustments();
     }
 }
@@ -502,7 +610,19 @@ protected override void OnBarUpdate()
     lastQRes = spaceR;
     double qResRunner = Helpers.Clamp01(spaceR / 2.0); // ≥2R = 1.0
 
-    if (spaceR < MinSpaceR)
+    // Determine minimum SpaceR threshold based on regime.  When regimes
+    // are enabled, use regime‑specific thresholds; otherwise use the
+    // base MinSpaceR.
+    double minSpace = MinSpaceR;
+    if (UseRegimes)
+    {
+        string regime = (ActiveRegime ?? string.Empty).Trim();
+        if (string.Equals(regime, "Trend", StringComparison.OrdinalIgnoreCase))
+            minSpace = MinSpaceRTrend;
+        else if (string.Equals(regime, "Chop", StringComparison.OrdinalIgnoreCase))
+            minSpace = MinSpaceRChop;
+    }
+    if (spaceR < minSpace)
         return false;
 
     return true;
