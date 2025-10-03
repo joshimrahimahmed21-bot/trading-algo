@@ -283,9 +283,10 @@ public double RunnerSpaceThreshold { get; set; }
         [Display(Name = "HysteresisBars", GroupName = "VP", Order = 202)]
         public int HysteresisBarsParam { get; set; }
 
-		[NinjaScriptProperty][Range(2, 100)]
-		[Display(Name = "DefaultQuantity", GroupName = "Position Settings", Order = 2)]
-		public int DefaultQuantityParam { get; set; }
+[NinjaScriptProperty][Range(1, 100)]
+[Display(Name="BaseContracts", GroupName="Position Settings", Order=1)]
+public int BaseContracts { get; set; }
+
 
 		[NinjaScriptProperty]
 		[Display(Name="ForceEntry", GroupName="Debug", Order=999)]
@@ -331,9 +332,6 @@ public double RunnerSpaceThreshold { get; set; }
     RunnerMomoThreshold = 0.0;
     RunnerSpaceThreshold = 0.0;
 
-    // DefaultQuantity: map to the param here
-    DefaultQuantityParam = 2;    // exposed in Analyzer
-    DefaultQuantity = DefaultQuantityParam;  // safe here
 
     // Entry filter defaults
     UseEntryTimeFilter = false;
