@@ -345,19 +345,33 @@ private void UpdateEntrySignals()
 protected override void OnBarUpdate()
 {
     if (BarsInProgress != 0) return;
+    // Require at least one completed bar before processing
     if (CurrentBar < 1) return;
 
-// Force-entry debug mode: if enabled and flat, submit a trade each bar
-if (ForceEntry && Position.MarketPosition == MarketPosition.Flat)
-{
-    bool forceIsLong = Close[0] > Open[0];    // decide direction by bar direction
-    EnsureSplitSizingReady();
-    ApplyRunnerPreset(forceIsLong);
-    return;   // skip normal logic
-}
-    // Safety: make sure indicators are initialized
-if (priceEma == null || atrIndicator == null)
-    return;   // skip until indicators are loaded
+    // Force-entry debug mode: if enabled and flat, submit a trade each bar
+    if (ForceEntry && Position.MarketPosition == MarketPosition.Flat)
+    {
+        bool forceIsLong = Close[0] > Open[0];    // decide direction by bar direction
+        EnsureSplitSizingReady();
+        ApplyRunnerPreset(forceIsLong);
+        return;   // skip normal logic
+    }
+    // Safety: make sure indicators are initialized and enough bars are available
+    if (priceEma == null || atrIndicator == null)
+    {
+        // Print a heartbeat so we know why processing is skipped
+        Print($"InitGuard: indicators not ready (EMA or ATR is null) at bar {CurrentBar}");
+        return;
+    }
+    // Warmup guard: wait until enough bars exist to compute EMA/ATR before proceeding
+    int warmupBarsNeeded = Math.Max(EntryEmaPeriod, 14);
+    if (CurrentBar < warmupBarsNeeded)
+    {
+        // Print every 10 bars to avoid log spam
+        if (CurrentBar % 10 == 0)
+            Print($"Warmup: waiting for {warmupBarsNeeded} bars, currently {CurrentBar}");
+        return;
+    }
 
 
     // Process only primary series and after enough bars are present
