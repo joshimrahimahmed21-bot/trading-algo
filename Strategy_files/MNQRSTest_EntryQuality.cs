@@ -21,6 +21,17 @@ namespace NinjaTrader.NinjaScript.Strategies
         private bool entryLongSignal;
         private bool entryShortSignal;
 
+        // Setup-arm state for breakout entries.  When a small candle crosses the EMA,
+        // the strategy records the setup bar's high/low and direction.  On subsequent
+        // bars, if price breaks beyond the setup range by one tick in the appropriate
+        // direction, a stop-market order will be submitted.  These fields track the
+        // armed state and parameters.
+        private bool setupArmed;
+        private bool setupIsLong;
+        private double setupHigh;
+        private double setupLow;
+        private int setupBarsAgo;
+
         // Quality metric components for the current bar
         private double Q_Space;
         private double Q_Trend;
@@ -29,6 +40,67 @@ namespace NinjaTrader.NinjaScript.Strategies
         // Composite quality values
         private double lastQTotalOld;
         private double lastQTotalNew;
+
+        // Helper functions for entry filters
+        /// <summary>
+        /// Determine if the current time is within the allowed entry window.  If the
+        /// session filter is disabled the result is always true.
+        /// </summary>
+        private bool IsWithinEntryTime()
+        {
+            if (!UseEntryTimeFilter)
+                return true;
+            // Use the primary bar series time stamp (Times[0][0])
+            DateTime ts = Times[0][0];
+            int minutes = ts.Hour * 60 + ts.Minute;
+            int startMinutes = EntryStartHour * 60 + EntryStartMinute;
+            int endMinutes = EntryEndHour * 60 + EntryEndMinute;
+            if (startMinutes <= endMinutes)
+            {
+                return minutes >= startMinutes && minutes <= endMinutes;
+            }
+            else
+            {
+                // Over midnight wrap
+                return (minutes >= startMinutes) || (minutes <= endMinutes);
+            }
+        }
+
+        /// <summary>
+        /// Determine if the ATR value is within the configured volatility bounds.  If the
+        /// volatility filter is disabled the result is always true.
+        /// </summary>
+        private bool IsVolatilityOk()
+        {
+            if (!UseVolatilityFilter)
+                return true;
+            // Ensure ATR indicator exists
+            double atrVal = atrIndicator != null ? atrIndicator[0] : 0.0;
+            return atrVal >= MinATR && atrVal <= MaxATR;
+        }
+
+        /// <summary>
+        /// Determine if the EMA slope meets the minimum threshold in the direction of the
+        /// trade.  If the trend filter is disabled the result is always true.
+        /// </summary>
+        /// <param name="wantLong">True if evaluating a long setup; false for short.</param>
+        private bool IsTrendOk(bool wantLong)
+        {
+            if (!UseTrendFilter)
+                return true;
+            // Compute raw slope (difference between current and prior EMA values)
+            if (priceEma == null || CurrentBar < 1)
+                return false;
+            double slope = priceEma[0] - priceEma[1];
+            if (wantLong)
+            {
+                return slope >= TrendSlopeMin;
+            }
+            else
+            {
+                return (-slope) >= TrendSlopeMin;
+            }
+        }
 
         /// <summary>
         /// Compute the base quality scores for the current bar.  This
@@ -124,68 +196,237 @@ namespace NinjaTrader.NinjaScript.Strategies
         /// here (for example, EMA crossover and small candle breakout) to
         /// set entryLongSignal or entryShortSignal accordingly.
         /// </summary>
-        private void UpdateEntrySignals()
-        {
-            entryLongSignal = false;
-            entryShortSignal = false;
+private void UpdateEntrySignals()
+{
+    // EMA + small candle breakout entry logic
+    // Reset direct entry flags (not used for breakout entries but retained for compatibility)
+    entryLongSignal = false;
+    entryShortSignal = false;
+
+    // Ensure we have enough bars and the EMA is initialized
+    if (CurrentBar < 1 || priceEma == null)
+        return;
+
+    // Compute bar range and small range threshold (in price units)
+    double barRange = High[0] - Low[0];
+    double threshold = Instrument.MasterInstrument.TickSize * MinAbsSpaceTicks;
+
+    // Determine EMA crossing relative to previous bar
+    bool crossUp = (Close[1] <= priceEma[1]) && (Close[0] > priceEma[0]);
+    bool crossDown = (Close[1] >= priceEma[1]) && (Close[0] < priceEma[0]);
+
+    // Only consider crosses on small bars
+    if (barRange <= threshold)
+    {
+        bool allowSetup = true;
+
+        // Quality gate
+        if (UseQualityGate && lastQTotalNew < MinQTotal2) {
+            LogSetupRow("Skip", crossUp ? "Long" : "Short", "QualityFail", High[0], Low[0], 0,0,0);
+            allowSetup = false;
+        }
+        // Session time filter
+        if (!IsWithinEntryTime()) {
+            LogSetupRow("Skip", crossUp ? "Long" : "Short", "TimeFail", High[0], Low[0], 0,0,0);
+            allowSetup = false;
+        }
+        // Volatility filter
+        if (!IsVolatilityOk()) {
+            LogSetupRow("Skip", crossUp ? "Long" : "Short", "VolFail", High[0], Low[0], 0,0,0);
+            allowSetup = false;
+        }
+        // Trend filter
+        if (crossUp && !IsTrendOk(true)) {
+            LogSetupRow("Skip", "Long", "TrendFail", High[0], Low[0], 0,0,0);
+            allowSetup = false;
+        }
+        if (crossDown && !IsTrendOk(false)) {
+            LogSetupRow("Skip", "Short", "TrendFail", High[0], Low[0], 0,0,0);
+            allowSetup = false;
         }
 
-        /// <summary>
-        /// Main strategy logic executed on each new bar.  This method
-        /// computes quality metrics, updates volume profile context,
-        /// checks quality gates and triggers entries via the runner
-        /// preset functions.  In‑trade management adjustments are
-        /// deferred to ApplyVPManagementAdjustments().
-        /// </summary>
-        protected override void OnBarUpdate()
+        if (allowSetup)
         {
-            // Process only primary series and after enough bars are present
-            if (BarsInProgress != 0) return;
-            if (CurrentBar < 1) return;
-
-            // 1. Compute base context quality metrics
-            ComputeBaseQualityMetrics();
-            // 2. Update positional volume inputs
-            UpdatePosVolInputs();
-            // 3. Update momentum core and families
-            bool isLong = entryLongSignal || (Position.MarketPosition == MarketPosition.Long);
-            MomentumCore_Update(isLong, out double qCore);
-            lastQMomoCore = qCore;
-            MomoFamilies_Update(Q_Space, Q_Trend);
-            // 4. Compute composite quality scores
-            ComputeQualityScores();
-            // 5. Update volume profile context if enabled
-            if (UseVolumeProfile)
+            if (crossUp)
             {
-                UpdateVPContext();
-            }
-            // 6. Determine entry signals
-            UpdateEntrySignals();
-            if (Position.MarketPosition == MarketPosition.Flat)
-            {
-                bool allowEntry = true;
-                // Apply quality gate if enabled
-                if (UseQualityGate && lastQTotalNew < MinQTotal2)
-                    allowEntry = false;
-                if (allowEntry)
-                {
-                    if (entryLongSignal)
-                    {
-                        EnsureSplitSizingReady();
-                        ApplyRunnerPreset(true);
-                    }
-                    else if (entryShortSignal)
-                    {
-                        EnsureSplitSizingReady();
-                        ApplyRunnerPreset(false);
-                    }
+                // --- Pass 10: space/resistance gating ---
+                if (!CheckSpaceAndResistance(true)) {
+                    LogSetupRow("Skip", "Long", "SpaceFail", High[0], Low[0], 0,0,0);
+                    return;
                 }
+
+                // Arm long breakout setup
+                setupArmed = true;
+                setupIsLong = true;
+                setupHigh = High[0];
+                setupLow = Low[0];
+                setupBarsAgo = 0;
+                LogSetupRow("Armed", "Long", "", setupHigh, setupLow, 0,0,0);
             }
-            // 7. In‑trade management
-            if (Position.MarketPosition != MarketPosition.Flat)
+            else if (crossDown)
             {
-                ApplyVPManagementAdjustments();
+                if (!CheckSpaceAndResistance(false)) {
+                    LogSetupRow("Skip", "Short", "SpaceFail", High[0], Low[0], 0,0,0);
+                    return;
+                }
+
+                // Arm short breakout setup
+                setupArmed = true;
+                setupIsLong = false;
+                setupHigh = High[0];
+                setupLow = Low[0];
+                setupBarsAgo = 0;
+                LogSetupRow("Armed", "Short", "", setupHigh, setupLow, 0,0,0);
             }
         }
     }
+}
+
+
+/// <summary>
+/// Main strategy logic executed on each new bar.  This method
+/// computes quality metrics, updates volume profile context,
+/// checks quality gates and triggers entries via the runner
+/// preset functions.  In-trade management adjustments are
+/// deferred to ApplyVPManagementAdjustments().
+/// </summary>
+protected override void OnBarUpdate()
+{
+    if (BarsInProgress != 0) return;
+    if (CurrentBar < 1) return;
+
+// Force-entry debug mode: if enabled and flat, submit a trade each bar
+if (ForceEntry && Position.MarketPosition == MarketPosition.Flat)
+{
+    bool forceIsLong = Close[0] > Open[0];    // decide direction by bar direction
+    EnsureSplitSizingReady();
+    ApplyRunnerPreset(forceIsLong);
+    return;   // skip normal logic
+}
+    // Safety: make sure indicators are initialized
+if (priceEma == null || atrIndicator == null)
+    return;   // skip until indicators are loaded
+
+
+    // Process only primary series and after enough bars are present
+    if (BarsInProgress != 0) return;
+    if (CurrentBar < 1) return;
+
+    // 1. Compute base context quality metrics
+    ComputeBaseQualityMetrics();
+    // 2. Update positional volume inputs
+    UpdatePosVolInputs();
+    // 3. Update momentum core and families
+    bool isLong = entryLongSignal || (Position.MarketPosition == MarketPosition.Long);
+    MomentumCore_Update(isLong, out double qCore);
+    lastQMomoCore = qCore;
+    MomoFamilies_Update(Q_Space, Q_Trend);
+    // 4. Compute composite quality scores
+    ComputeQualityScores();
+
+    // === Quality metrics expansion (Pass 9) ===
+    // Q_Swing: slope of the price EMA (scaled by tick size)
+    double emaSlope = (CurrentBar >= 1) ? (priceEma[0] - priceEma[1]) : 0.0;
+    lastQSwing = Helpers.Clamp01(Math.Abs(emaSlope) / (Instrument.MasterInstrument.TickSize * 10.0));
+
+    // Q_Momo: use the core momentum measure
+    lastQMomoRaw = lastQMomoCore;
+
+    // Q_Vol: normalised ATR
+    double atrNorm = (atrIndicator != null) ? atrIndicator[0] / (MaxATR > 0 ? MaxATR : 1.0) : 0.0;
+    lastQVol = Helpers.Clamp01(atrNorm);
+
+    // Q_Session: session time weighting
+    lastQSession = Session_WeightNow();
+
+    // 5. Update volume profile context if enabled
+    if (UseVolumeProfile)
+    {
+        UpdateVPContext();
+    }
+    // 6. Determine entry signals or arm breakout setups
+    UpdateEntrySignals();
+    // Handle armed breakout setups when flat
+    if (Position.MarketPosition == MarketPosition.Flat)
+    {
+        // If a setup is currently armed, look for the breakout trigger
+        if (setupArmed)
+        {
+            // Compute the breakout price (one tick beyond the setup bar)
+            double tick = Instrument.MasterInstrument.TickSize;
+            if (setupIsLong)
+            {
+                double breakoutPrice = setupHigh + tick;
+                // If price trades above breakout level on this bar, submit a stop-market order
+                if (High[0] > breakoutPrice)
+                {
+                    EnsureSplitSizingReady();
+                    ApplyRunnerPreset(true);
+                    setupArmed = false;
+                }
+                else
+                {
+                    setupBarsAgo++;
+                    if (setupBarsAgo > 3)
+                        setupArmed = false;
+                }
+            }
+            else
+            {
+                double breakoutPrice = setupLow - tick;
+                if (Low[0] < breakoutPrice)
+                {
+                    EnsureSplitSizingReady();
+                    ApplyRunnerPreset(false);
+                    setupArmed = false;
+                }
+                else
+                {
+                    setupBarsAgo++;
+                    if (setupBarsAgo > 3)
+                        setupArmed = false;
+                }
+				if (setupArmed && setupBarsAgo > 3) {
+    LogSetupRow("Expired", setupIsLong ? "Long":"Short", "Stale", setupHigh, setupLow, 0,0,0);
+    setupArmed = false;
+}
+
+            }
+        }
+        // If no setup is armed, we could consider other direct entry signals (if any)
+    }
+    // 7. In-trade management
+    if (Position.MarketPosition != MarketPosition.Flat)
+    {
+        ApplyVPManagementAdjustments();
+    }
+}
+   private bool CheckSpaceAndResistance(bool isLong)
+{
+    int lookback = 20;
+    double localMaxHigh = High[0];
+    double localMinLow = Low[0];
+    for (int i = 1; i <= Math.Min(CurrentBar, lookback); i++)
+    {
+        if (High[i] > localMaxHigh) localMaxHigh = High[i];
+        if (Low[i] < localMinLow)  localMinLow  = Low[i];
+    }
+
+    double barRange = High[0] - Low[0];
+    double minRisk  = Instrument.MasterInstrument.TickSize * Math.Max(1, MinAbsSpaceTicks);
+    double riskR    = Math.Max(barRange, minRisk);
+
+    double spaceR = isLong
+        ? (localMaxHigh - Close[0]) / riskR
+        : (Close[0] - localMinLow) / riskR;
+
+    lastQRes = spaceR;
+    double qResRunner = Helpers.Clamp01(spaceR / 2.0); // ≥2R = 1.0
+
+    if (spaceR < MinSpaceR)
+        return false;
+
+    return true;
+}
+ }
 }
