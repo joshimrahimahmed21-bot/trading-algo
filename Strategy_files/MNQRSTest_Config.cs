@@ -307,101 +307,106 @@ public int BaseContracts { get; set; }
         {
             if (State == State.SetDefaults)
             {
+                // Always use OnBarClose for safety
                 Description = "MNQRSTest strategy (PosVol and Momo logic added)";
-                Name = "MNQRSTest";
-                Calculate = Calculate.OnBarClose;
+                Name        = "MNQRSTest";
+                Calculate   = Calculate.OnBarClose;
+
+                // Fix default quantity at 1 (required by NinjaTrader)
                 DefaultQuantity = 1;
+                // BaseContracts is the user‑facing sizing parameter; ensure at least 1
                 if (BaseContracts <= 0) BaseContracts = 1;
-                // Set default values for all public properties
+
+                // --- Default values for all public properties ---
                 W_PosVolProxy = 0.0;
-                W_FavMomo = 0.0;
-                W_TrueMomo = 0.0;
+                W_FavMomo     = 0.0;
+                W_TrueMomo    = 0.0;
                 W_MomoROC = W_MomoTSI = W_MomoMACD = W_MomoER = W_MomoStreak = 0.0;
-                W_PosVolVP = 0.0;
-                W_PosRes = 0.0;
+                W_PosVolVP    = 0.0;
+                W_PosRes      = 0.0;
                 FavMomoAmplifier = 0.0;
                 UseQualityGate = false;
-                MinQTotal2 = 0.5;
+                MinQTotal2     = 0.5;
                 UseVolumeProfile = false;
                 ApplyRunnerManagement = false;
-                BatchTag = string.Empty;
-                MinSpaceR = 1.0;
+                BatchTag       = string.Empty;
+                MinSpaceR      = 1.0;
                 MinAbsSpaceTicks = 8;
-                // Default EMA anchor settings
-                EntryEmaPeriod = 62;
+
+                // Entry filter defaults
+                UseEntryTimeFilter = false;
+                EntryStartHour   = 9;
+                EntryStartMinute = 30;
+                EntryEndHour     = 15;
+                EntryEndMinute   = 30;
+                UseVolatilityFilter = false;
+                MinATR          = 0.0;
+                MaxATR          = 1000.0;
+                UseTrendFilter  = false;
+                TrendSlopeMin   = 0.0;
+
+                // Runner gating thresholds
+                RunnerMomoThreshold  = 0.0;
+                RunnerSpaceThreshold = 0.0;
+
+                // EMA anchor defaults
+                EntryEmaPeriod   = 62;
                 MinEmaTouchTicks = 2;
+
+                // Advanced toggles defaults
                 UseMomentumCore = false;
-                UsePosVolNodes = false;
-                PosVol_RB_N = 20;
-                PosVol_LTF_K = 2;
+                UsePosVolNodes  = false;
+                PosVol_RB_N     = 20;
+                PosVol_LTF_K    = 2;
                 PosVol_InfluenceAlpha = 0.0;
-                PosVol_InfluenceBeta = 0.0;
+                PosVol_InfluenceBeta  = 0.0;
                 PosVol_InfluenceGamma = 0.0;
-				ForceEntry = false;
-				if (State == State.SetDefaults)
-{
-    Description = "MNQRSTest strategy (PosVol and Momo logic added)";
-    Name = "MNQRSTest";
-    Calculate = Calculate.OnBarClose;
-                DefaultQuantity = 1;
-                if (BaseContracts <= 0) BaseContracts = 1;
 
-    // Your other default values...
-    RunnerMomoThreshold = 0.0;
-    RunnerSpaceThreshold = 0.0;
+                // VP runner adjustment defaults
+                VP_RunnerK1Param = 0.0;
+                VP_RunnerK2Param = 0.0;
+                HysteresisBarsParam = 0;
 
+                // Debug toggles
+                ForceEntry = false;
+            }
+            else if (State == State.DataLoaded)
+            {
+                // Initialize indicators once data is loaded
+                deltaStats = new RollingStats(100);
+                dirEma     = new Ema(8);
+                deltaEma   = new Ema(14);
+                // Runner percentage base (0.5 if BaseContracts >= 2)
+                lastRunnerPct = (BaseContracts < 2) ? 0.0 : 0.5;
+                lastRunnerBasePct = lastRunnerPct;
 
-    // Entry filter defaults
-    UseEntryTimeFilter = false;
-    EntryStartHour = 9;
-    EntryStartMinute = 30;
-    EntryEndHour = 15;
-    EntryEndMinute = 30;
-    UseVolatilityFilter = false;
-    MinATR = 0.0;
-    MaxATR = 1000.0;
-    UseTrendFilter = false;
-    TrendSlopeMin = 0.0;
+                rsiIndicator = RSI(14, 3);
+                adxIndicator = ADX(14);
+                // Initialize EMA and ATR based on user‑configurable periods
+                priceEma     = EMA(EntryEmaPeriod);
+                atrIndicator = ATR(14);
 
-    // Default EMA anchor settings
-    EntryEmaPeriod = 62;
-    MinEmaTouchTicks = 2;
-}
-else if (State == State.DataLoaded)
-{
-    // Initialize indicators
-    deltaStats = new RollingStats(100);
-    dirEma = new Ema(8);
-    deltaEma = new Ema(14);
-    lastRunnerPct = (BaseContracts < 2) ? 0.0 : 0.5;
-    rsiIndicator = RSI(14, 3);
-    adxIndicator = ADX(14);
-    // Initialize the price EMA using the configurable EntryEmaPeriod
-    priceEma = EMA(EntryEmaPeriod);
-    atrIndicator = ATR(14);
+                // Initialize momentum core if present
+                try { MomentumCore_OnStateChange(); } catch { }
 
-    try
-    {
-        MomentumCore_OnStateChange();
-    }
-    catch {}
+                // Initialize logging (creates files with headers)
+                EnsureLogsInitialized();
 
-    EnsureLogsInitialized();
-
-
-                // Apply BatchTag presets…
+                // Apply batch tag presets (A/B/C etc.) if set
                 if (!string.IsNullOrEmpty(BatchTag))
                 {
                     switch (BatchTag.ToUpper().Trim())
                     {
                         case "A":
-                            W_PosVolProxy = W_FavMomo = W_TrueMomo = 0.0;
+                            // Batch A disables PosVol and momentum contributions
+                            W_PosVolProxy = 0.0;
+                            W_FavMomo     = 0.0;
+                            W_TrueMomo    = 0.0;
                             W_MomoROC = W_MomoTSI = W_MomoMACD = W_MomoER = W_MomoStreak = 0.0;
-                            UseVolumeProfile = false;
+                            UseVolumeProfile     = false;
                             ApplyRunnerManagement = false;
                             break;
-                        // (B/C/D cases same as before)
-					}
+                        // Additional batch tags (B/C/D) can be added here as needed
                     }
                 }
             }
