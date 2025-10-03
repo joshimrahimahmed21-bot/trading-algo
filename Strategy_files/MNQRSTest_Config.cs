@@ -212,6 +212,17 @@ public double RunnerSpaceThreshold { get; set; }
 		[Display(Name = "MinAbsSpaceTicks", GroupName = "Entry Filters", Order = 12)]
 		public int MinAbsSpaceTicks { get; set; }
 
+        // Entry EMA anchor parameters
+        // EntryEmaPeriod: period of the EMA used as the anchor for entry triggers (typically 62)
+        // MinEmaTouchTicks: minimum number of ticks that price must close beyond the EMA after touching it
+        [NinjaScriptProperty][Range(1, 200)]
+        [Display(Name = "EntryEmaPeriod", GroupName = "Entry Filters", Order = 13)]
+        public int EntryEmaPeriod { get; set; }
+
+        [NinjaScriptProperty][Range(0, 100)]
+        [Display(Name = "MinEmaTouchTicks", GroupName = "Entry Filters", Order = 14)]
+        public int MinEmaTouchTicks { get; set; }
+
         // Toggles for advanced components
         [NinjaScriptProperty]
         [Display(Name = "UseMomentumCore", GroupName = "MomentumCore", Order = 50)]
@@ -299,6 +310,8 @@ public int BaseContracts { get; set; }
                 Description = "MNQRSTest strategy (PosVol and Momo logic added)";
                 Name = "MNQRSTest";
                 Calculate = Calculate.OnBarClose;
+                DefaultQuantity = 1;
+                if (BaseContracts <= 0) BaseContracts = 1;
                 // Set default values for all public properties
                 W_PosVolProxy = 0.0;
                 W_FavMomo = 0.0;
@@ -314,6 +327,9 @@ public int BaseContracts { get; set; }
                 BatchTag = string.Empty;
                 MinSpaceR = 1.0;
                 MinAbsSpaceTicks = 8;
+                // Default EMA anchor settings
+                EntryEmaPeriod = 62;
+                MinEmaTouchTicks = 2;
                 UseMomentumCore = false;
                 UsePosVolNodes = false;
                 PosVol_RB_N = 20;
@@ -327,6 +343,8 @@ public int BaseContracts { get; set; }
     Description = "MNQRSTest strategy (PosVol and Momo logic added)";
     Name = "MNQRSTest";
     Calculate = Calculate.OnBarClose;
+                DefaultQuantity = 1;
+                if (BaseContracts <= 0) BaseContracts = 1;
 
     // Your other default values...
     RunnerMomoThreshold = 0.0;
@@ -344,6 +362,10 @@ public int BaseContracts { get; set; }
     MaxATR = 1000.0;
     UseTrendFilter = false;
     TrendSlopeMin = 0.0;
+
+    // Default EMA anchor settings
+    EntryEmaPeriod = 62;
+    MinEmaTouchTicks = 2;
 }
 else if (State == State.DataLoaded)
 {
@@ -351,10 +373,11 @@ else if (State == State.DataLoaded)
     deltaStats = new RollingStats(100);
     dirEma = new Ema(8);
     deltaEma = new Ema(14);
-    lastRunnerPct = (DefaultQuantity < 2) ? 0.0 : 0.5;
+    lastRunnerPct = (BaseContracts < 2) ? 0.0 : 0.5;
     rsiIndicator = RSI(14, 3);
     adxIndicator = ADX(14);
-    priceEma = EMA(20);
+    // Initialize the price EMA using the configurable EntryEmaPeriod
+    priceEma = EMA(EntryEmaPeriod);
     atrIndicator = ATR(14);
 
     try
