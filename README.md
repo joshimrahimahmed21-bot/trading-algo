@@ -1,58 +1,75 @@
-# MNQRSTest Strategy (NinjaTrader 8)
+# MNQRSTest Trading Algorithm
 
-## Overview
-This repository contains the consolidated version of the **MNQRSTest** trading strategy for NinjaTrader 8, along with supporting utilities, documentation, and telemetry schema.  
-
-The strategy implements:
-- **Entry gating** via composite quality metrics (Q_Total2)
-- **Momentum logic** (FavMomo / TrueMomo from volume + regime context)
-- **Positional volume quality** (Q_PosVol)
-- **Runner logic** for partial position management
-- **Volume profile (VP) management** for trail/runner adjustments
-- **Centralized telemetry** (CSV + HardLock) to ensure cross-engine parity with Python replicas
+A NinjaTrader 8 strategy (C#) for micro NASDAQ (MNQ) futures, developed iteratively in **passes**.  
+This repo combines the **source code** and a structured **development log** to ensure continuity across sessions and contributors.
 
 ---
 
-## Repository Layout
+## 📂 Repo Structure
 
-/Strategies/
-├── MNQRSTest_Config.cs # Input parameters, defaults, shared fields
-├── MNQRSTest_EntryQuality.cs # OnBarUpdate loop, quality gating, entry signals
-├── MNQRSTest_MomentumPosVol.cs # MomentumCore + PosVol node graph
-├── MNQRSTest_SessionVP.cs # Session anchor weighting, VP context, overlay
-├── MNQRSTest_SizingRunner.cs # Risk-based sizing, runner split logic
-├── MNQRSTest_LoggingHardLock.cs # Telemetry + CSV/HardLock exporters (to be unified)
-├── MNQRSTest_Utilities.cs # Helpers (Clamp01, Squash, Blend, RollingStats, Ema)
-└── QVP Indicator.cs # Volume profile indicator used by VP logic
+- **/Strategy_files**  
+  All NinjaTrader 8 strategy partials (`Config.cs`, `EntryQuality.cs`, `SizingRunner.cs`, `LoggingHardLock.cs`, etc.).
 
-/docs/
-├── CODER_HANDBOOK.md # Compile-safe coder handbook (current coding standards)
-├── Module Info For Parity.docx # Legacy pre-consolidation doc (for reference)
-├── DEPENDENCIES.md # Module interaction map
-└── TELEMETRY_SCHEMA.md # CSV schema definition for telemetry output
-
-
+- **/docs**  
+  Contains the *Golden Context* documentation, split into four main sections:  
+  - **Pass Roadmap** – Iterative development steps (1–20+).  
+  - **Coder Handbook & Best Practices** – Conventions, logging, debug, sizing rules.  
+  - **Current System State Summary** – What’s working now, what’s in progress.  
+  - **NinjaTrader Quirks & Discoveries** – Platform-specific gotchas and lessons learned.
 
 ---
 
-## Development Standards
-- All code must compile in NinjaTrader 8 without warnings or duplicate definitions.
-- All `[NinjaScriptProperty]` inputs must be explicitly defaulted in `OnStateChange (State.SetDefaults)`.
-- Helper methods (`Clamp01`, `Squash`, `Blend`) live **only** in `MNQRSTest_Utilities.cs`.
-- Multi-timeframe code is guarded by `UseMTFValidation` and `CurrentBars[..]` checks.
-- Logging must go through a single telemetry dispatcher with headers matching `/docs/TELEMETRY_SCHEMA.md`.
+## 🔄 Development Workflow
 
-See `/docs/CODER_HANDBOOK.md` for full rules.
+- Work is organized into **passes**. Each pass delivers one self-contained feature, fix, or refinement.  
+- After each pass:  
+  1. Code is updated in `/Strategy_files`.  
+  2. Logs/docs in `/docs` are updated (especially the **Current System State** and **Roadmap**).  
+  3. Commit/branch is tagged with the pass number (e.g. `pass-16.5-basecontracts`).  
 
----
-
-## Historical Notes
-- The `Module Info For Parity.docx` is retained for context. It describes module boundaries and design rationale from the pre-consolidation era. **Use only for reference; current code structure is in this repo’s `/Strategies/MNQRSTest/` folder.**
-- Telemetry and CSV schema are aligned with Python replica engine to ensure one-to-one metric parity.
+This ensures future sessions or agents can pick up exactly where the last left off.
 
 ---
 
-## Next Steps
-1. **Compile in NinjaTrader 8** → confirm no syntax errors.
-2. **Export Error Grid (CSV)** if compile fails → commit under `/error-grids/` for tracking.
-3. **Agent cleanup** → feed CSV back into the agent loop to patch brace/namespace errors, unify fields, and simplify telemetry.
+## 📌 Current Status
+
+- **Pass 16** complete: introduced `BaseContracts` param to replace NinjaTrader’s unreliable `DefaultQuantity`.  
+- **Pass 16.5 (in progress)**: wire `BaseContracts` into all `EnterLong/EnterShort` calls, confirm CORE/RUNNER split sizing, and update Trades.csv with a `Contracts` column.  
+- Next pass: **Pass 17** – risk sizing modes (currency-based, account-fraction).
+
+---
+
+## ⚠️ Important NinjaTrader Notes
+
+- Always keep `DefaultQuantity = 1` (fixed in `SetDefaults`).  
+- Position sizing is controlled entirely by **BaseContracts**.  
+- All order methods must use explicit overloads (`EnterLong(qty, "tag")`).  
+- Logs:  
+  - `Trades.csv` – entry records (CORE, RUNNER, Single).  
+  - `Exits.csv` – exit fills (Target, Stop, Breakeven).  
+  - `Setups.csv` – signals, skips, and reasons.  
+  - `RunInfo.txt` – snapshot of all param settings.  
+
+See **/docs** for the detailed handbook and roadmap.
+
+---
+
+## 🚀 Getting Started
+
+1. Open NinjaTrader 8.  
+2. Add the strategy files from `/Strategy_files` to `Documents/NinjaTrader 8/bin/Custom/Strategies`.  
+3. Recompile and enable `MNQRSTest`.  
+4. Review `/docs/Current System State Summary.md` for the latest instructions on parameter defaults and known caveats.  
+
+---
+
+## 🤝 Contributing
+
+- Follow the **pass workflow**: one feature/fix per pass.  
+- Update both code and docs.  
+- Tag commits/branches with pass numbers.  
+- Use `ForceEntry` (debug param) only for smoke tests.  
+
+---
+
+This repo is designed so that **any new agent or contributor can pick up exactly where the last left off**, without rediscovering old bugs or quirks.  
