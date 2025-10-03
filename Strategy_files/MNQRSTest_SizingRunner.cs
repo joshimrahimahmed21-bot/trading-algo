@@ -1,41 +1,141 @@
 using System;
+using NinjaTrader.Cbi;
 using NinjaTrader.NinjaScript;
 using NinjaTrader.NinjaScript.Strategies;
 
 namespace NinjaTrader.NinjaScript.Strategies
 {
+    /// <summary>
+    /// Runner management for MNQRSTest with eligibility gating and exit logging.
+    /// CORE closes at +1R, RUNNER stop sits at breakeven. All exits logged.
+    /// </summary>
     public partial class MNQRSTest : Strategy
     {
+        private double lastEntryPrice;
+
         private void EnsureSplitSizingReady()
         {
             if (!ApplyRunnerManagement)
             {
-                lastRunnerPct = (DefaultQuantity < 2) ? 0.0 : 0.5;
+                lastRunnerBasePct = 0.0;
+                lastRunnerPct = 0.0;
                 return;
             }
-            // simplified risk-based sizing stub
-            lastRunnerPct = (DefaultQuantity < 2) ? 0.0 : 0.5;
+            lastRunnerBasePct = (DefaultQuantity < 2 ? 0.0 : 0.5);
+            lastRunnerPct = lastRunnerBasePct;
         }
 
-        private void ApplyRunnerPreset(bool isLong)
-        {
-            int totalQty = (int)DefaultQuantity;
-            if (totalQty <= 0) totalQty = 1;
-            int runnerQty = (int)Math.Floor(totalQty * lastRunnerPct);
-            if (runnerQty < 0) runnerQty = 0;
-            if (runnerQty > totalQty) runnerQty = totalQty;
-            int coreQty = totalQty - runnerQty;
+private void ApplyRunnerPreset(bool isLong)
+{
+    // compute normal allowRunner chain
+    bool allowRunner = ApplyRunnerManagement && DefaultQuantity >= 2;
+    if (allowRunner)
+    {
+        allowRunner = (lastQRes >= RunnerSpaceThreshold) && (lastQMomoCore >= RunnerMomoThreshold);
+    }
 
-            if (isLong)
-            {
-                if (coreQty > 0) EnterLong(coreQty, "CORE");
-                if (runnerQty > 0) EnterLong(runnerQty, "RUNNER");
-            }
-            else
-            {
-                if (coreQty > 0) EnterShort(coreQty, "CORE");
-                if (runnerQty > 0) EnterShort(runnerQty, "RUNNER");
-            }
+    // debug: print each factor so you see what's blocking
+    Print($"ApplyRunnerManagement={ApplyRunnerManagement}, DefaultQuantity={DefaultQuantity}, " +
+          $"QRes={lastQRes:F2} vs {RunnerSpaceThreshold}, QMomo={lastQMomoCore:F2} vs {RunnerMomoThreshold}, " +
+          $"Result={allowRunner}");
+
+    // override for smoke-test:
+    if (ForceEntry) allowRunner = true;
+
+
+    int qty = Math.Max(1, (int)DefaultQuantity);
+    double entryPrice = Close[0];
+    lastEntryPrice    = entryPrice;
+
+    double barRange = High[0] - Low[0];
+    double minRisk  = Instrument.MasterInstrument.TickSize * Math.Max(1, MinAbsSpaceTicks);
+    double risk     = Math.Max(barRange, minRisk);
+
+    double stopPrice, targetPrice;
+    if (isLong)
+    {
+        stopPrice   = entryPrice - risk;
+        targetPrice = entryPrice + risk;
+    }
+    else
+    {
+        stopPrice   = entryPrice + risk;
+        targetPrice = entryPrice - risk;
+    }
+    plannedStopPrice   = stopPrice;
+    plannedTargetPrice = targetPrice;
+
+    if (allowRunner)
+    {
+        int runnerQty = Math.Max(1, qty / 2);
+        int coreQty   = Math.Max(1, qty - runnerQty);
+
+        // CORE: 1R stop + 1R target
+        SetStopLoss     ("CORE",   CalculationMode.Price, stopPrice,  false);
+        SetProfitTarget ("CORE",   CalculationMode.Price, targetPrice);
+
+        // RUNNER: breakeven stop
+        SetStopLoss     ("RUNNER", CalculationMode.Price, entryPrice, false);
+
+        if (coreQty > 0)
+        {
+            if (isLong) EnterLong(coreQty, "CORE");
+            else        EnterShort(coreQty, "CORE");
+            LogTradeRow(isLong ? "Long" : "Short", entryPrice, stopPrice, targetPrice, coreQty, "CORE");
+        }
+        if (runnerQty > 0)
+        {
+            if (isLong) EnterLong(runnerQty, "RUNNER");
+            else        EnterShort(runnerQty, "RUNNER");
+            LogTradeRow(isLong ? "Long" : "Short", entryPrice, entryPrice, double.NaN, runnerQty, "RUNNER");
+        }
+    }
+    else
+    {
+        // Single: full size, 1R stop + target
+        SetStopLoss     ("Single", CalculationMode.Price, stopPrice,  false);
+        SetProfitTarget ("Single", CalculationMode.Price, targetPrice);
+
+        if (isLong)  EnterLong (qty, "Single");
+        else         EnterShort(qty, "Single");
+        LogTradeRow(isLong ? "Long" : "Short", entryPrice, stopPrice, targetPrice, qty, "Single");
+    }
+}
+
+
+
+        /// <summary>
+        /// Correct NT8 signature for execution updates: log exits using LogExit.
+        /// </summary>
+        protected override void OnExecutionUpdate(Execution execution, string executionId, double price,
+            int quantity, MarketPosition marketPosition, string orderId, DateTime time)
+        {
+            if (execution == null || execution.Order == null) return;
+            if (execution.Order.OrderState != OrderState.Filled) return;
+
+            string entryName = execution.Order.FromEntrySignal ?? "";
+            if (entryName != "CORE" && entryName != "RUNNER" && entryName != "Single")
+                return;
+
+            // Exit orders: generated by SetStopLoss/SetProfitTarget
+            bool isExitFill = !string.Equals(execution.Order.Name ?? "", entryName, StringComparison.OrdinalIgnoreCase);
+            if (!isExitFill) return;
+
+            string side = (execution.Order.OrderAction == OrderAction.Sell) ? "Long"
+                       : (execution.Order.OrderAction == OrderAction.BuyToCover) ? "Short"
+                       : "?";
+
+            double tick = Instrument?.MasterInstrument?.TickSize ?? 1.0;
+            string exitType = "Manual";
+
+            if (Math.Abs(price - plannedTargetPrice) < 0.5 * tick)
+                exitType = "Target";
+            else if (Math.Abs(price - plannedStopPrice) < 0.5 * tick)
+                exitType = "Stop";
+            else if (Math.Abs(price - lastEntryPrice) < 0.5 * tick)
+                exitType = "Breakeven";
+
+            LogExit(side, entryName, price, exitType);
         }
     }
 }
