@@ -27,10 +27,10 @@ namespace NinjaTrader.NinjaScript.Strategies
             exitLogPath  = System.IO.Path.Combine(runFolder, "Exits.csv");
             runInfoPath  = System.IO.Path.Combine(runFolder, "RunInfo.txt");
 
-            // Trades header
+            // Trades header: include contracts + runner info
             System.IO.File.WriteAllText(
                 tradeLogPath,
-                "Date,Time,Side,Entry,Stop,Target,Qty,EntryName,Q_Total2,Q_Swing,Q_Momo,Q_Vol,Q_Session,Q_ResRunner,SpaceR,ATR,SessionWeight\n"
+                "Date,Time,Side,Entry,Stop,Target,Qty,Contracts,EntryName,Q_Total2,Q_Swing,Q_Momo,Q_Vol,Q_Session,Q_ResRunner,SpaceR,ATR,SessionWeight,RunnerPct,RunnerR\n"
             );
 
             // Setups header
@@ -63,7 +63,9 @@ namespace NinjaTrader.NinjaScript.Strategies
             info += $"TrendSlopeMin: {TrendSlopeMin}\n";
             info += $"MinSpaceR: {MinSpaceR}\n";
             info += $"MinAbsSpaceTicks: {MinAbsSpaceTicks}\n";
-            info += $"DefaultQuantity: {DefaultQuantity}\n";
+            info += $"BaseContracts: {BaseContracts}\n";
+            info += $"EntryEmaPeriod: {EntryEmaPeriod}\n";
+            info += $"MinEmaTouchTicks: {MinEmaTouchTicks}\n";
             info += $"UseMomentumCore: {UseMomentumCore}\n";
             info += $"UsePosVolNodes: {UsePosVolNodes}\n";
             info += $"W_QSwing: {W_QSwing}\n";
@@ -95,8 +97,11 @@ namespace NinjaTrader.NinjaScript.Strategies
             double sessionWeight = 1.0;
             try { sessionWeight = Session_WeightNow(); } catch { }
 
+            double pct = Helpers.Clamp01(lastRunnerPct);
+            double runnerR = Math.Max(1.5, Math.Min(6.0, 1.0 / Math.Max(0.1, Math.Min(0.9, pct))));
+
             string row = string.Format(
-                "{0},{1},{2},{3:F2},{4:F2},{5:F2},{6},{7},{8:F4},{9:F4},{10:F4},{11:F4},{12:F4},{13:F4},{14:F4},{15:F4},{16:F4}",
+                "{0},{1},{2},{3:F2},{4:F2},{5:F2},{6},{7},{8},{9:F4},{10:F4},{11:F4},{12:F4},{13:F4},{14:F4},{15:F4},{16:F4},{17:F2},{18:F2}",
                 dateString,
                 timeString,
                 side,
@@ -104,6 +109,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 stopPrice,
                 targetPrice,
                 qty,
+                BaseContracts,
                 entryName,
                 lastQTotal2,
                 lastQSwing,
@@ -113,16 +119,18 @@ namespace NinjaTrader.NinjaScript.Strategies
                 Helpers.Clamp01(lastQRes / 2.0),
                 lastQRes,
                 atrValue,
-                sessionWeight
+                sessionWeight,
+                pct,
+                runnerR
             );
 
             System.IO.File.AppendAllText(tradeLogPath, row + Environment.NewLine);
         }
 
         private void LogSetupRow(
-            string evt,   // "Armed","Skip","Expired"
-            string side,  // "Long" or "Short"
-            string why,   // reason
+            string evt,
+            string side,
+            string why,
             double trig,
             double stp,
             double tgt,

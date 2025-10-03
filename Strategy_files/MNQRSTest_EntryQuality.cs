@@ -210,10 +210,46 @@ private void UpdateEntrySignals()
     // Compute bar range and small range threshold (in price units)
     double barRange = High[0] - Low[0];
     double threshold = Instrument.MasterInstrument.TickSize * MinAbsSpaceTicks;
+    // Debug: skip bars with too large a range for breakout setups
+    if (barRange > threshold)
+    {
+        Print($"Skip: Bar too large (range {barRange:F2} > smallThreshold {threshold:F2})");
+        return;
+    }
 
-    // Determine EMA crossing relative to previous bar
+    // Determine EMA crossing relative to previous bar and evaluate touch-and-bounce conditions
     bool crossUp = (Close[1] <= priceEma[1]) && (Close[0] > priceEma[0]);
     bool crossDown = (Close[1] >= priceEma[1]) && (Close[0] < priceEma[0]);
+
+    // Additional touch-and-bounce evaluation around the EMA.  Price may touch the EMA within a small threshold
+    // and close at least that distance beyond the EMA to count as an entry interaction.
+    {
+        double emaNow = priceEma[0];
+        double tickSize = Instrument.MasterInstrument.TickSize;
+        double touchThresh = tickSize * MinEmaTouchTicks;
+        if (!crossUp)
+        {
+            if ((Low[0] <= emaNow) && ((emaNow - Low[0]) <= touchThresh) && ((Close[0] - emaNow) >= touchThresh))
+            {
+                crossUp = true;
+            }
+        }
+        if (!crossDown)
+        {
+            if ((High[0] >= emaNow) && ((High[0] - emaNow) <= touchThresh) && ((emaNow - Close[0]) >= touchThresh))
+            {
+                crossDown = true;
+            }
+        }
+    }
+
+    // If neither a long nor a short EMA interaction is detected, skip setup and log the reason
+    if (!crossUp && !crossDown)
+    {
+        Print("Skip: No EMA cross or touch detected");
+        LogSetupRow("Skip", "", "NoEmaTouch", High[0], Low[0], 0, 0, 0);
+        return;
+    }
 
     // Only consider crosses on small bars
     if (barRange <= threshold)
@@ -221,27 +257,37 @@ private void UpdateEntrySignals()
         bool allowSetup = true;
 
         // Quality gate
-        if (UseQualityGate && lastQTotalNew < MinQTotal2) {
-            LogSetupRow("Skip", crossUp ? "Long" : "Short", "QualityFail", High[0], Low[0], 0,0,0);
+        if (UseQualityGate && lastQTotalNew < MinQTotal2)
+        {
+            Print($"Skip: QualityGate (QTotalNew {lastQTotalNew:F2} < MinQTotal2 {MinQTotal2:F2})");
+            LogSetupRow("Skip", crossUp ? "Long" : "Short", "QualityFail", High[0], Low[0], 0, 0, 0);
             allowSetup = false;
         }
         // Session time filter
-        if (!IsWithinEntryTime()) {
-            LogSetupRow("Skip", crossUp ? "Long" : "Short", "TimeFail", High[0], Low[0], 0,0,0);
+        if (!IsWithinEntryTime())
+        {
+            Print("Skip: Time filter fail");
+            LogSetupRow("Skip", crossUp ? "Long" : "Short", "TimeFail", High[0], Low[0], 0, 0, 0);
             allowSetup = false;
         }
         // Volatility filter
-        if (!IsVolatilityOk()) {
-            LogSetupRow("Skip", crossUp ? "Long" : "Short", "VolFail", High[0], Low[0], 0,0,0);
+        if (!IsVolatilityOk())
+        {
+            Print("Skip: Volatility filter fail");
+            LogSetupRow("Skip", crossUp ? "Long" : "Short", "VolFail", High[0], Low[0], 0, 0, 0);
             allowSetup = false;
         }
         // Trend filter
-        if (crossUp && !IsTrendOk(true)) {
-            LogSetupRow("Skip", "Long", "TrendFail", High[0], Low[0], 0,0,0);
+        if (crossUp && !IsTrendOk(true))
+        {
+            Print("Skip: Trend filter fail (long)");
+            LogSetupRow("Skip", "Long", "TrendFail", High[0], Low[0], 0, 0, 0);
             allowSetup = false;
         }
-        if (crossDown && !IsTrendOk(false)) {
-            LogSetupRow("Skip", "Short", "TrendFail", High[0], Low[0], 0,0,0);
+        if (crossDown && !IsTrendOk(false))
+        {
+            Print("Skip: Trend filter fail (short)");
+            LogSetupRow("Skip", "Short", "TrendFail", High[0], Low[0], 0, 0, 0);
             allowSetup = false;
         }
 
@@ -250,8 +296,10 @@ private void UpdateEntrySignals()
             if (crossUp)
             {
                 // --- Pass 10: space/resistance gating ---
-                if (!CheckSpaceAndResistance(true)) {
-                    LogSetupRow("Skip", "Long", "SpaceFail", High[0], Low[0], 0,0,0);
+                if (!CheckSpaceAndResistance(true))
+                {
+                    Print("Skip: Space/resistance fail (long)");
+                    LogSetupRow("Skip", "Long", "SpaceFail", High[0], Low[0], 0, 0, 0);
                     return;
                 }
 
@@ -261,12 +309,15 @@ private void UpdateEntrySignals()
                 setupHigh = High[0];
                 setupLow = Low[0];
                 setupBarsAgo = 0;
-                LogSetupRow("Armed", "Long", "", setupHigh, setupLow, 0,0,0);
+                Print($"Armed: Long setup at bar {CurrentBar}, high={setupHigh:F2}, low={setupLow:F2}");
+                LogSetupRow("Armed", "Long", "", setupHigh, setupLow, 0, 0, 0);
             }
             else if (crossDown)
             {
-                if (!CheckSpaceAndResistance(false)) {
-                    LogSetupRow("Skip", "Short", "SpaceFail", High[0], Low[0], 0,0,0);
+                if (!CheckSpaceAndResistance(false))
+                {
+                    Print("Skip: Space/resistance fail (short)");
+                    LogSetupRow("Skip", "Short", "SpaceFail", High[0], Low[0], 0, 0, 0);
                     return;
                 }
 
@@ -276,7 +327,8 @@ private void UpdateEntrySignals()
                 setupHigh = High[0];
                 setupLow = Low[0];
                 setupBarsAgo = 0;
-                LogSetupRow("Armed", "Short", "", setupHigh, setupLow, 0,0,0);
+                Print($"Armed: Short setup at bar {CurrentBar}, high={setupHigh:F2}, low={setupLow:F2}");
+                LogSetupRow("Armed", "Short", "", setupHigh, setupLow, 0, 0, 0);
             }
         }
     }
@@ -360,8 +412,15 @@ if (priceEma == null || atrIndicator == null)
                 // If price trades above breakout level on this bar, submit a stop-market order
                 if (High[0] > breakoutPrice)
                 {
+                    // breakout trigger detected: fire trade and log triggered setup
                     EnsureSplitSizingReady();
                     ApplyRunnerPreset(true);
+                    // log the triggered event with breakout price and planned core target/stop for reference
+                    try
+                    {
+                        LogSetupRow("Triggered", "Long", "", breakoutPrice, plannedStopPriceCore, plannedTargetPriceCore, lastQRes, 0);
+                    }
+                    catch { /* ignore if logging fails */ }
                     setupArmed = false;
                 }
                 else
@@ -376,8 +435,14 @@ if (priceEma == null || atrIndicator == null)
                 double breakoutPrice = setupLow - tick;
                 if (Low[0] < breakoutPrice)
                 {
+                    // breakout trigger detected: fire trade and log triggered setup
                     EnsureSplitSizingReady();
                     ApplyRunnerPreset(false);
+                    try
+                    {
+                        LogSetupRow("Triggered", "Short", "", breakoutPrice, plannedStopPriceCore, plannedTargetPriceCore, lastQRes, 0);
+                    }
+                    catch { /* ignore if logging fails */ }
                     setupArmed = false;
                 }
                 else

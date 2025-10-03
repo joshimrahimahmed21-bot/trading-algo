@@ -12,6 +12,8 @@ namespace NinjaTrader.NinjaScript.Strategies
     public partial class MNQRSTest : Strategy
     {
         private double lastEntryPrice;
+        private double plannedTargetPriceCore, plannedStopPriceCore;
+        private double plannedTargetPriceRunner, plannedStopPriceRunner;
 
         private void EnsureSplitSizingReady()
         {
@@ -21,21 +23,21 @@ namespace NinjaTrader.NinjaScript.Strategies
                 lastRunnerPct = 0.0;
                 return;
             }
-            lastRunnerBasePct = (DefaultQuantity < 2 ? 0.0 : 0.5);
+            lastRunnerBasePct = (BaseContracts < 2 ? 0.0 : 0.5);
             lastRunnerPct = lastRunnerBasePct;
         }
 
 private void ApplyRunnerPreset(bool isLong)
 {
     // compute normal allowRunner chain
-    bool allowRunner = ApplyRunnerManagement && DefaultQuantity >= 2;
+    bool allowRunner = ApplyRunnerManagement && BaseContracts >= 2;
     if (allowRunner)
     {
         allowRunner = (lastQRes >= RunnerSpaceThreshold) && (lastQMomoCore >= RunnerMomoThreshold);
     }
 
     // debug: print each factor so you see what's blocking
-    Print($"ApplyRunnerManagement={ApplyRunnerManagement}, DefaultQuantity={DefaultQuantity}, " +
+    Print($"ApplyRunnerManagement={ApplyRunnerManagement}, BaseContracts={BaseContracts}, " +
           $"QRes={lastQRes:F2} vs {RunnerSpaceThreshold}, QMomo={lastQMomoCore:F2} vs {RunnerMomoThreshold}, " +
           $"Result={allowRunner}");
 
@@ -43,7 +45,7 @@ private void ApplyRunnerPreset(bool isLong)
     if (ForceEntry) allowRunner = true;
 
 
-    int qty = Math.Max(1, (int)DefaultQuantity);
+    int qty = Math.Max(1, BaseContracts);
     double entryPrice = Close[0];
     lastEntryPrice    = entryPrice;
 
@@ -62,13 +64,27 @@ private void ApplyRunnerPreset(bool isLong)
         stopPrice   = entryPrice + risk;
         targetPrice = entryPrice - risk;
     }
-    plannedStopPrice   = stopPrice;
-    plannedTargetPrice = targetPrice;
+    plannedStopPrice   = stopPrice; // legacy single
+    plannedTargetPrice = targetPrice; // legacy single
+
+    plannedStopPriceCore = stopPrice;
+    plannedTargetPriceCore = targetPrice;
+    plannedStopPriceRunner = isLong ? entryPrice : entryPrice;
+    // plannedTargetPriceRunner set below when allowRunner branch executes
 
     if (allowRunner)
     {
-        int runnerQty = Math.Max(1, qty / 2);
-        int coreQty   = Math.Max(1, qty - runnerQty);
+        int runnerQty = Math.Max(1, BaseContracts / 2);
+        int coreQty   = Math.Max(1, BaseContracts - runnerQty);
+
+        
+// Compute runner target multiple (R) from lastRunnerPct; inverse mapping with clamps
+double pct = Helpers.Clamp01(lastRunnerPct);
+pct = Math.Max(0.1, Math.Min(0.9, pct));
+double runnerR = Math.Max(1.5, Math.Min(6.0, 1.0 / pct));
+double runnerTarget = isLong ? (entryPrice + runnerR * risk) : (entryPrice - runnerR * risk);
+plannedTargetPriceRunner = runnerTarget;
+plannedStopPriceRunner = entryPrice;
 
         // CORE: 1R stop + 1R target
         SetStopLoss     ("CORE",   CalculationMode.Price, stopPrice,  false);
@@ -76,6 +92,7 @@ private void ApplyRunnerPreset(bool isLong)
 
         // RUNNER: breakeven stop
         SetStopLoss     ("RUNNER", CalculationMode.Price, entryPrice, false);
+        SetProfitTarget ("RUNNER", CalculationMode.Price, plannedTargetPriceRunner);
 
         if (coreQty > 0)
         {
@@ -87,7 +104,7 @@ private void ApplyRunnerPreset(bool isLong)
         {
             if (isLong) EnterLong(runnerQty, "RUNNER");
             else        EnterShort(runnerQty, "RUNNER");
-            LogTradeRow(isLong ? "Long" : "Short", entryPrice, entryPrice, double.NaN, runnerQty, "RUNNER");
+            LogTradeRow(isLong ? "Long" : "Short", entryPrice, entryPrice, plannedTargetPriceRunner, runnerQty, "RUNNER");
         }
     }
     else
@@ -128,9 +145,16 @@ private void ApplyRunnerPreset(bool isLong)
             double tick = Instrument?.MasterInstrument?.TickSize ?? 1.0;
             string exitType = "Manual";
 
-            if (Math.Abs(price - plannedTargetPrice) < 0.5 * tick)
+            double expectedTarget = entryName == "CORE" ? plannedTargetPriceCore
+                                   : entryName == "RUNNER" ? plannedTargetPriceRunner
+                                   : plannedTargetPrice;
+            double expectedStop   = entryName == "CORE" ? plannedStopPriceCore
+                                   : entryName == "RUNNER" ? plannedStopPriceRunner
+                                   : plannedStopPrice;
+
+            if (Math.Abs(price - expectedTarget) < 0.5 * tick)
                 exitType = "Target";
-            else if (Math.Abs(price - plannedStopPrice) < 0.5 * tick)
+            else if (Math.Abs(price - expectedStop) < 0.5 * tick)
                 exitType = "Stop";
             else if (Math.Abs(price - lastEntryPrice) < 0.5 * tick)
                 exitType = "Breakeven";
