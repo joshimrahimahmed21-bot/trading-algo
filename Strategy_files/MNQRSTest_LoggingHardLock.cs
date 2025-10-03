@@ -12,6 +12,12 @@ namespace NinjaTrader.NinjaScript.Strategies
         private string runInfoPath;
         private string setupLogPath;
 
+        // Paths for completed trade and equity curve logs
+        private string completedTradesPath;
+        private string equityCurvePath;
+        // Cumulative PnL for equity curve logging
+        private double cumulativePnL;
+
         private void EnsureLogsInitialized()
         {
             if (logsReady) return;
@@ -27,16 +33,20 @@ namespace NinjaTrader.NinjaScript.Strategies
             exitLogPath  = System.IO.Path.Combine(runFolder, "Exits.csv");
             runInfoPath  = System.IO.Path.Combine(runFolder, "RunInfo.txt");
 
-            // Trades header: include contracts + runner info
+            // Completed trades and equity curve paths
+            completedTradesPath = System.IO.Path.Combine(runFolder, "CompletedTrades.csv");
+            equityCurvePath    = System.IO.Path.Combine(runFolder, "EquityCurve.csv");
+
+            // Trades header: include contracts + runner info + regime
             System.IO.File.WriteAllText(
                 tradeLogPath,
-                "Date,Time,Side,Entry,Stop,Target,Qty,Contracts,EntryName,Q_Total2,Q_Swing,Q_Momo,Q_Vol,Q_Session,Q_ResRunner,SpaceR,ATR,SessionWeight,RunnerPct,RunnerR\n"
+                "Date,Time,Side,Entry,Stop,Target,Qty,Contracts,EntryName,Q_Total2,Q_Swing,Q_Momo,Q_Vol,Q_Session,Q_ResRunner,SpaceR,ATR,SessionWeight,RunnerPct,RunnerR,Regime\n"
             );
 
             // Setups header
             System.IO.File.WriteAllText(
                 setupLogPath,
-                "Date,Time,Event,Side,Reason,Trig,Stop,Tgt,R,StopTicks,Notes\n"
+                "Date,Time,Event,Side,Reason,Trig,Stop,Tgt,R,StopTicks,Notes,Regime\n"
             );
 
             // Exits header
@@ -44,6 +54,22 @@ namespace NinjaTrader.NinjaScript.Strategies
                 exitLogPath,
                 "Date,Time,Side,EntryName,ExitPrice,ExitType\n"
             );
+
+            // Completed trades header
+            System.IO.File.WriteAllText(
+                completedTradesPath,
+                "Date,EntryTime,ExitTime,Side,EntryName,Qty,EntryPrice,ExitPrice,ExitType,HoldBars,PnL_Ticks,PnL_Price,R_Multiple,Q_Total2,Q_Swing,Q_Momo,Q_Vol,Q_Session,ATR,SpaceR,Regime\n"
+            );
+
+            // Initialize equity curve file if toggled
+            if (LogEquityCurve)
+            {
+                System.IO.File.WriteAllText(
+                    equityCurvePath,
+                    "Date,Time,CumulativePnL\n"
+                );
+                cumulativePnL = 0.0;
+            }
 
             // RunInfo.txt content
             string info = "";
@@ -76,6 +102,25 @@ namespace NinjaTrader.NinjaScript.Strategies
             info += $"RunnerMomoThreshold: {RunnerMomoThreshold}\n";
             info += $"RunnerSpaceThreshold: {RunnerSpaceThreshold}\n";
 
+            // New parameters for runner timeout and verbose setup logging
+            info += $"RunnerMaxBars: {RunnerMaxBars}\n";
+            info += $"LogSetupsVerbose: {LogSetupsVerbose}\n";
+            // Regime and equity logging info
+            info += $"UseRegimes: {UseRegimes}\n";
+            info += $"ActiveRegime: {ActiveRegime}\n";
+            info += $"LogEquityCurve: {LogEquityCurve}\n";
+
+            // Regime filter thresholds
+            info += $"MinATRTrend: {MinATRTrend}\n";
+            info += $"MinATRChop: {MinATRChop}\n";
+            info += $"TrendSlopeMinTrend: {TrendSlopeMinTrend}\n";
+            info += $"TrendSlopeMinChop: {TrendSlopeMinChop}\n";
+            info += $"MinSpaceRTrend: {MinSpaceRTrend}\n";
+            info += $"MinSpaceRChop: {MinSpaceRChop}\n";
+            info += $"MinQTotal2Trend: {MinQTotal2Trend}\n";
+            info += $"MinQTotal2Chop: {MinQTotal2Chop}\n";
+            info += $"UseAutoRegimeSwitch: {UseAutoRegimeSwitch}\n";
+
             System.IO.File.WriteAllText(runInfoPath, info);
 
             logsReady = true;
@@ -100,8 +145,10 @@ namespace NinjaTrader.NinjaScript.Strategies
             double pct = Helpers.Clamp01(lastRunnerPct);
             double runnerR = Math.Max(1.5, Math.Min(6.0, 1.0 / Math.Max(0.1, Math.Min(0.9, pct))));
 
+            // Determine regime for current trade (if regimes enabled)
+            string regime = ActiveRegime;
             string row = string.Format(
-                "{0},{1},{2},{3:F2},{4:F2},{5:F2},{6},{7},{8},{9:F4},{10:F4},{11:F4},{12:F4},{13:F4},{14:F4},{15:F4},{16:F4},{17:F2},{18:F2}",
+                "{0},{1},{2},{3:F2},{4:F2},{5:F2},{6},{7},{8},{9:F4},{10:F4},{11:F4},{12:F4},{13:F4},{14:F4},{15:F4},{16:F4},{17:F2},{18:F2},{19}",
                 dateString,
                 timeString,
                 side,
@@ -121,7 +168,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                 atrValue,
                 sessionWeight,
                 pct,
-                runnerR
+                runnerR,
+                regime
             );
 
             System.IO.File.AppendAllText(tradeLogPath, row + Environment.NewLine);
@@ -142,8 +190,10 @@ namespace NinjaTrader.NinjaScript.Strategies
             string dateString = Time[0].ToString("yyyy-MM-dd");
             string timeString = Time[0].ToString("HH:mm:ss");
 
+            // include the current regime in the setup log
+            string regime = ActiveRegime;
             string row = string.Format(
-                "{0},{1},{2},{3},{4},{5:F2},{6:F2},{7:F2},{8:F2},{9:F2},{10}",
+                "{0},{1},{2},{3},{4},{5:F2},{6:F2},{7:F2},{8:F2},{9:F2},{10},{11}",
                 dateString,
                 timeString,
                 evt,
@@ -154,7 +204,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                 tgt,
                 r,
                 stopTicks,
-                notes
+                notes,
+                regime
             );
             System.IO.File.AppendAllText(setupLogPath, row + Environment.NewLine);
         }
@@ -175,6 +226,74 @@ namespace NinjaTrader.NinjaScript.Strategies
                 exitType
             );
             System.IO.File.AppendAllText(exitLogPath, row + Environment.NewLine);
+        }
+
+        /// <summary>
+        /// Log a completed trade with entry and exit details, PnL metrics and quality metrics.
+        /// </summary>
+        private void LogCompletedTrade(
+            string entryDate,
+            string entryTime,
+            string exitDate,
+            string exitTime,
+            string side,
+            string entryName,
+            int qty,
+            double entryPrice,
+            double exitPrice,
+            string exitType,
+            int holdBars,
+            double pnlTicks,
+            double pnlPrice,
+            double rMultiple,
+            double qTotal2,
+            double qSwing,
+            double qMomo,
+            double qVol,
+            double qSession,
+            double atrValue,
+            double spaceR,
+            string regime)
+        {
+            EnsureLogsInitialized();
+            string row = string.Format(
+                "{0},{1},{2},{3},{4},{5},{6},{7:F2},{8:F2},{9},{10:F2},{11:F2},{12:F2},{13:F4},{14:F4},{15:F4},{16:F4},{17:F4},{18:F4},{19:F4},{20}",
+                entryDate,
+                entryTime,
+                exitDate + " " + exitTime,
+                side,
+                entryName,
+                qty,
+                entryPrice,
+                exitPrice,
+                exitType,
+                holdBars,
+                pnlTicks,
+                pnlPrice,
+                rMultiple,
+                qTotal2,
+                qSwing,
+                qMomo,
+                qVol,
+                qSession,
+                atrValue,
+                spaceR,
+                regime
+            );
+            System.IO.File.AppendAllText(completedTradesPath, row + Environment.NewLine);
+
+            // Update equity curve if enabled
+            if (LogEquityCurve)
+            {
+                cumulativePnL += pnlPrice;
+                string eqRow = string.Format(
+                    "{0},{1},{2:F2}",
+                    exitDate,
+                    exitTime,
+                    cumulativePnL
+                );
+                System.IO.File.AppendAllText(equityCurvePath, eqRow + Environment.NewLine);
+            }
         }
     }
 }

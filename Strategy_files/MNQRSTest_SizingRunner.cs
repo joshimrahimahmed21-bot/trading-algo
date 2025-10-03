@@ -36,6 +36,8 @@ private void ApplyRunnerPreset(bool isLong)
         allowRunner = (lastQRes >= RunnerSpaceThreshold) && (lastQMomoCore >= RunnerMomoThreshold);
     }
 
+
+
     // debug: print each factor so you see what's blocking
     Print($"ApplyRunnerManagement={ApplyRunnerManagement}, BaseContracts={BaseContracts}, " +
           $"QRes={lastQRes:F2} vs {RunnerSpaceThreshold}, QMomo={lastQMomoCore:F2} vs {RunnerMomoThreshold}, " +
@@ -93,6 +95,9 @@ plannedStopPriceRunner = entryPrice;
         // RUNNER: breakeven stop
         SetStopLoss     ("RUNNER", CalculationMode.Price, entryPrice, false);
         SetProfitTarget ("RUNNER", CalculationMode.Price, plannedTargetPriceRunner);
+
+        // Debug: print planned runner target and stop for visibility
+        Print($"Runner planned target={plannedTargetPriceRunner:F2}, stop={plannedStopPriceRunner:F2}");
 
         if (coreQty > 0)
         {
@@ -152,14 +157,91 @@ plannedStopPriceRunner = entryPrice;
                                    : entryName == "RUNNER" ? plannedStopPriceRunner
                                    : plannedStopPrice;
 
-            if (Math.Abs(price - expectedTarget) < 0.5 * tick)
+            // Determine exit type based on price proximity and special order name
+            if (execution.Order.Name != null && execution.Order.Name.Equals("RunnerTimeout", StringComparison.OrdinalIgnoreCase))
+            {
+                exitType = "Timeout";
+            }
+            else if (Math.Abs(price - expectedTarget) < 0.5 * tick)
+            {
                 exitType = "Target";
+            }
             else if (Math.Abs(price - expectedStop) < 0.5 * tick)
+            {
                 exitType = "Stop";
+            }
             else if (Math.Abs(price - lastEntryPrice) < 0.5 * tick)
+            {
                 exitType = "Breakeven";
+            }
 
             LogExit(side, entryName, price, exitType);
+
+            // Log completed trade (entry + exit) and compute PnL metrics
+            try
+            {
+                // Determine bars since entry for this signal
+                int barsAgo = BarsSinceEntryExecution(0, entryName, 0);
+                if (barsAgo >= 0)
+                {
+                    // Entry time from BarsAgo
+                    DateTime entryTime = Times[0][barsAgo];
+                    string entryDateString = entryTime.ToString("yyyy-MM-dd");
+                    string entryTimeString = entryTime.ToString("HH:mm:ss");
+                    string exitDateString = time.ToString("yyyy-MM-dd");
+                    string exitTimeString = time.ToString("HH:mm:ss");
+                    int holdBars = barsAgo;
+                    double tickSize = Instrument?.MasterInstrument?.TickSize ?? 1.0;
+                    // Calculate PnL per contract in price and ticks
+                    double diff = (side == "Long") ? (price - lastEntryPrice) : (lastEntryPrice - price);
+                    double pnlPrice = diff * quantity;
+                    double pnlTicks = diff / tickSize;
+                    // Risk is difference between entry and core target
+                    double riskUnit = Math.Abs(plannedTargetPriceCore - lastEntryPrice);
+                    double rMultiple = (riskUnit > 0) ? (diff / riskUnit) : 0.0;
+                    // Capture current Q metrics and ATR
+                    double atrValue = (atrIndicator != null) ? atrIndicator[0] : double.NaN;
+                    double spaceR = lastQRes;
+                    // Determine current regime
+                    string regime = ActiveRegime;
+                    // Log the completed trade
+                    LogCompletedTrade(
+                        entryDateString,
+                        entryTimeString,
+                        exitDateString,
+                        exitTimeString,
+                        side,
+                        entryName,
+                        Math.Abs(quantity),
+                        lastEntryPrice,
+                        price,
+                        exitType,
+                        holdBars,
+                        pnlTicks,
+                        pnlPrice,
+                        rMultiple,
+                        lastQTotal2,
+                        lastQSwing,
+                        lastQMomoRaw,
+                        lastQVol,
+                        lastQSession,
+                        atrValue,
+                        spaceR,
+                        regime
+                    );
+                }
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Regime detection stub. Returns the currently active regime.  Future
+        /// implementations can override this method to compute a dynamic regime
+        /// based on market conditions.
+        /// </summary>
+        private string DetectRegime()
+        {
+            return ActiveRegime;
         }
     }
 }
