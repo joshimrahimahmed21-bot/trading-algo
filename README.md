@@ -1,75 +1,154 @@
-# MNQRSTest Trading Algorithm
+MNQRSTest – Adaptive Quantitative Strategy (NinjaTrader 8)
+📌 Overview
 
-A NinjaTrader 8 strategy (C#) for micro NASDAQ (MNQ) futures, developed iteratively in **passes**.  
-This repo combines the **source code** and a structured **development log** to ensure continuity across sessions and contributors.
+MNQRSTest is an advanced, modular NinjaTrader 8 strategy designed for adaptive breakout and momentum trading on intraday futures instruments.
+The system evolves dynamically through multiple “passes,” each building on the prior architecture to improve robustness, interpretability, and machine-learning readiness.
 
----
+The strategy currently trades using:
 
-## 📂 Repo Structure
+Multi-contract (core + runner) structure for flexible trade management
 
-- **/Strategy_files**  
-  All NinjaTrader 8 strategy partials (`Config.cs`, `EntryQuality.cs`, `SizingRunner.cs`, `LoggingHardLock.cs`, etc.).
+Composite quality scoring across momentum, positional volume, trend strength, and market structure
 
-- **/docs**  
-  Contains the *Golden Context* documentation, split into four main sections:  
-  - **Pass Roadmap** – Iterative development steps (1–20+).  
-  - **Coder Handbook & Best Practices** – Conventions, logging, debug, sizing rules.  
-  - **Current System State Summary** – What’s working now, what’s in progress.  
-  - **NinjaTrader Quirks & Discoveries** – Platform-specific gotchas and lessons learned.
+Fully configurable filters (volatility, trend slope, session time, space/resistance, quality gate)
 
----
+Regime-aware thresholds and optional auto-switching logic (Pass 27 complete)
 
-## 🔄 Development Workflow
+Comprehensive logging and dataset generation for post-analysis and ML research
 
-- Work is organized into **passes**. Each pass delivers one self-contained feature, fix, or refinement.  
-- After each pass:  
-  1. Code is updated in `/Strategy_files`.  
-  2. Logs/docs in `/docs` are updated (especially the **Current System State** and **Roadmap**).  
-  3. Commit/branch is tagged with the pass number (e.g. `pass-16.5-basecontracts`).  
+🧭 Current State (Post-Pass 27)
 
-This ensures future sessions or agents can pick up exactly where the last left off.
+As of October 2025, MNQRSTest is stable and research-ready:
 
----
+✅ Multi-contract sizing (BaseContracts) and runner exit logic fully validated
 
-## 📌 Current Status
+✅ Regime-aware filters (ATR, Trend, Quality, Space) operational
 
-- **Pass 16** complete: introduced `BaseContracts` param to replace NinjaTrader’s unreliable `DefaultQuantity`.  
-- **Pass 16.5 (in progress)**: wire `BaseContracts` into all `EnterLong/EnterShort` calls, confirm CORE/RUNNER split sizing, and update Trades.csv with a `Contracts` column.  
-- Next pass: **Pass 17** – risk sizing modes (currency-based, account-fraction).
+✅ Full trade, setup, and equity logging for analytics and ML input
 
----
+⏸️ Development paused for research and node architecture planning
 
-## ⚠️ Important NinjaTrader Notes
+The next phase focuses on wiring Relativity (temporal normalization and decay nodes) and modularizing Momentum Core and Positional Volume so that each can act as a pluggable signal node with its own recency weighting and context awareness.
 
-- Always keep `DefaultQuantity = 1` (fixed in `SetDefaults`).  
-- Position sizing is controlled entirely by **BaseContracts**.  
-- All order methods must use explicit overloads (`EnterLong(qty, "tag")`).  
-- Logs:  
-  - `Trades.csv` – entry records (CORE, RUNNER, Single).  
-  - `Exits.csv` – exit fills (Target, Stop, Breakeven).  
-  - `Setups.csv` – signals, skips, and reasons.  
-  - `RunInfo.txt` – snapshot of all param settings.  
+🧮 Relativity Concept
 
-See **/docs** for the detailed handbook and roadmap.
+Relativity is a universal normalization layer for signals.
+Instead of treating each metric (ATR, PosVol, Momentum) on an absolute scale, Relativity maps it to its own recent distribution using rolling statistics or EWMA decay:
 
----
+Relativity
+(
+𝑥
+𝑡
+)
+=
+𝑥
+𝑡
+−
+𝜇
+𝑡
+𝜎
+𝑡
+,
+𝜇
+𝑡
+=
+(
+1
+−
+𝛼
+)
+𝜇
+𝑡
+−
+1
++
+𝛼
+𝑥
+𝑡
+Relativity(x
+t
+	​
 
-## 🚀 Getting Started
+)=
+σ
+t
+	​
 
-1. Open NinjaTrader 8.  
-2. Add the strategy files from `/Strategy_files` to `Documents/NinjaTrader 8/bin/Custom/Strategies`.  
-3. Recompile and enable `MNQRSTest`.  
-4. Review `/docs/Current System State Summary.md` for the latest instructions on parameter defaults and known caveats.  
+x
+t
+	​
 
----
+−μ
+t
+	​
 
-## 🤝 Contributing
+	​
 
-- Follow the **pass workflow**: one feature/fix per pass.  
-- Update both code and docs.  
-- Tag commits/branches with pass numbers.  
-- Use `ForceEntry` (debug param) only for smoke tests.  
+,μ
+t
+	​
 
----
+=(1−α)μ
+t−1
+	​
 
-This repo is designed so that **any new agent or contributor can pick up exactly where the last left off**, without rediscovering old bugs or quirks.  
++αx
+t
+	​
+
+
+This allows signals to be compared and weighted consistently regardless of market volatility regime.
+The same architecture will later support temporal decay (“recent bars matter more”) and adaptive node weighting.
+
+⚙️ Next Development Phase
+Pause Node: Relativity & MomentumPosVol Assessment
+
+Wire Relativity as a portable signal transform function (not a monolithic module).
+
+Refactor Momentum Core and Positional Volume into independent nodes with Relativity and Decay capabilities.
+
+Validate filters with sane defaults (e.g. ATR filter active with realistic bounds).
+
+Prepare for mass optimizer sweeps and data generation for regime detection research.
+
+Pass 28 – Data-Driven Regime Detection
+
+Implement true regime logic using Relativized metrics (e.g. normalized ATR + ADX + PosVol structure).
+Include hysteresis to avoid flip-flopping and record regime transitions in logs.
+
+Pass 29 – Regime-Specific Trade Management
+
+Allow regimes to modify runner behavior (TP length, timeout, allocation) and filter weights.
+
+Pass 30 – Optimization & ML Sweeps
+
+Run large-scale optimizer and Monte Carlo equity sims to derive statistically robust parameter sets.
+Generate datasets for regime classifier training.
+
+Pass 31 – Deployment & Risk Hardening
+
+Finalize dynamic risk module, add kill-switches and equity curve guardrails, and document for live trading and prop account deployment.
+
+🔍 Research Goals During Pause
+
+Quantify how PosVol and Momentum correlate with subsequent breakout continuation.
+
+Determine optimal Relativity/Decay parameters for signal stability vs responsiveness.
+
+Identify volatility and volume patterns that differentiate Trend vs Chop regimes.
+
+Back-test various runner management profiles to map regime → TP length relationships.
+
+Run optimizer sweeps to rebuild data-driven regime switch logic based on proof data.
+
+🧰 Running and Testing
+
+Compile Strategy in NinjaTrader 8 (MNQRSTest in Strategy folder).
+
+Analyzer Run: Use Strategy Analyzer → select instrument (e.g. MNQ 1-min).
+
+Parameters of Interest: BaseContracts, ApplyRunnerManagement, UseQualityGate, MinQTotal2, UseRegimes.
+
+Logs: Output to Documents\\NinjaTrader 8\\log → RunInfo.txt, Trades.csv, CompletedTrades.csv, Setups.csv, EquityCurve.csv.
+
+Optimization: Set LogSetupsVerbose = false for speed; enable Genetic Optimizer for large parameter spaces.
